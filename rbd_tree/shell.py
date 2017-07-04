@@ -17,8 +17,10 @@
 import logging
 import argparse
 
-from rbd_tree import RbdItem
+from rbd_tree import RbdItem, RbdRootItem
 from ab_tree import ShellTree
+import ceph_client
+import re
 
 
 def _setup_logger(level=logging.INFO):
@@ -34,20 +36,43 @@ def _setup_logger(level=logging.INFO):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Print rbd volumes/snapshot in tree')
+        description='Print rbd volumes/snapshot in tree',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--verbose', '-v', action='store_true')
-    parser.add_argument('pool', nargs='?', default='rbd_ssd',
-                        help='the pool name, default: rbd_ssd')
-    parser.add_argument('vol', help='the volume id or rbd image id')
+    parser.add_argument('--user', '-u', default='admin',
+                        help='the ceph user')
+    parser.add_argument('--cluster', '-c', default='ceph',
+                        help='the ceph cluster name')
+    parser.add_argument('--conffile', '-C', default='/etc/ceph/ceph.conf',
+                        help='the ceph config file')
+    parser.add_argument('--parents', '-P', action='store_true',
+                        help='show parents or not')
+    parser.add_argument('--pool', '-p', default='rbd_ssd',
+                        help='the pool name')
+    parser.add_argument('vol', nargs='?', default='',
+                        help='the volume id or rbd image id, '
+                        'print the all volumes if vol is not specified')
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
     _setup_logger(level=log_level)
 
-    image_id = (args.vol if args.vol.startswith('volume') else
-                'volume-{}'.format(args.vol))
-    root = RbdItem(image_id, pool=args.pool)
-    tree = ShellTree(root)
+    ceph_client.RadosClient.initialize(
+        args.pool, args.conffile, args.user, args.cluster)
+    with ceph_client.RadosClient() as client:
+        ceph_client.ioctx = client.ioctx
+        if args.vol:
+            image_id = args.vol
+            # replace cinder volume id with rbd image name
+            if re.match(r'^\w{8}-\w{4}-\w{4}-\w{4}-\w{12}$', image_id):
+                image_id = 'volume-{}'.format(image_id)
+            if args.parents:
+                image_id = ceph_client.get_root(image_id)
+            root = RbdItem(image_id)
+        else:
+            root_vols = ceph_client.get_root_vols()
+            root = RbdRootItem(root_vols)
+        tree = ShellTree(root)
     tree.draw()
 
 

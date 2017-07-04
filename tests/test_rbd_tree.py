@@ -18,26 +18,21 @@ import unittest
 from mock import patch, call
 
 from rbd_tree import rbd_tree
-import subprocess
 from rbd_tree.ab_tree import ShellTree
 
 
 class TestRbdTree(unittest.TestCase):
 
-    @patch('rbd_tree.rbd_tree.run_cmd')
-    def test_search_children(self, mock_cmd):
-        mock_cmd.side_effect = [
+    @patch('rbd_tree.rbd_tree.ceph_client.get_snaps')
+    def test_search_children(self, mock_get_snaps):
+        mock_get_snaps.side_effect = [
             # two snapshots of root volume
-            '''
-            SNAPID NAME                                             SIZE
-            5 snapshot-00000000-0000-0000-0000-000000000000 1024 MB 
-            6 snapshot-00000000-0000-0000-0000-000000000001 1024 MB 
-            '''
+            ['snapshot-00000000-0000-0000-0000-000000000000',
+             'snapshot-00000000-0000-0000-0000-000000000001']
         ]
-        cmd_args = ['rbd', '-p', 'pool_name', 'snap', 'ls', 'vid']
-        root = rbd_tree.RbdItem('vid', 'pool_name')
+        root = rbd_tree.RbdItem('vid')
         root.search_children()
-        mock_cmd.assert_called_once_with(cmd_args)
+        mock_get_snaps.assert_called_once_with('vid')
         self.assertEqual(len(root.children), 2)
         self.assertEqual(root.children[0].vid, 'vid')
         self.assertEqual(root.children[0].sid,
@@ -46,49 +41,43 @@ class TestRbdTree(unittest.TestCase):
         self.assertEqual(root.children[1].sid,
                          'snapshot-00000000-0000-0000-0000-000000000001')
 
-    @patch('rbd_tree.rbd_tree.run_cmd')
-    def test_search_children_no_children(self, mock_cmd):
-        mock_cmd.side_effect = ['']
-        cmd_args = ['rbd', '-p', 'pool_name', 'snap', 'ls', 'vid']
-        root = rbd_tree.RbdItem('vid', 'pool_name')
+    @patch('rbd_tree.rbd_tree.ceph_client.get_snaps')
+    def test_search_children_no_children(self, mock_get_snaps):
+        mock_get_snaps.side_effect = [[]]
+        root = rbd_tree.RbdItem('vid')
         root.search_children()
-        mock_cmd.assert_called_once_with(cmd_args)
+        mock_get_snaps.assert_called_once_with('vid')
         self.assertEqual(len(root.children), 0)
 
-    @patch('rbd_tree.rbd_tree.run_cmd')
-    def test_search_children_no_root(self, mock_cmd):
-        cmd_args = ['rbd', '-p', 'pool_name', 'snap', 'ls', 'vid']
-        mock_cmd.side_effect = subprocess.CalledProcessError(2, cmd_args)
-        root = rbd_tree.RbdItem('vid', 'pool_name')
-        self.assertRaises(subprocess.CalledProcessError, root.search_children)
-
-    @patch('rbd_tree.rbd_tree.run_cmd')
-    def test_construct(self, mock_cmd):
-        mock_cmd.side_effect = [
+    @patch('rbd_tree.rbd_tree.ceph_client.get_snaps')
+    @patch('rbd_tree.rbd_tree.ceph_client.get_children_vols')
+    def test_construct(self, mock_get_children, mock_get_snaps):
+        mock_get_snaps.side_effect = [
             # two snapshots of root volume
-            '''
-            SNAPID NAME                                             SIZE
-            5 snapshot-00000000-0000-0000-0000-000000000000 1024 MB 
-            6 snapshot-00000000-0000-0000-0000-000000000001 1024 MB 
-            ''',
-            # one child volume of the first
-            'rbd_ssd/volume-00000000-0000-0000-0000-000000000000',
+            ['snapshot-00000000-0000-0000-0000-000000000000',
+             'snapshot-00000000-0000-0000-0000-000000000001'],
             # no snapshot of volume-00000000-0000-0000-0000-000000000000
-            '',
+            []
+        ]
+        mock_get_children.side_effect = [
+            # one child volume of the first
+            ['volume-00000000-0000-0000-0000-000000000000'],
             # no child volume of the second volume
-            '']
-        calls = [call(['rbd', '-p', 'pool_name', 'snap', 'ls', 'vid']),
-                 call(['rbd', '-p', 'pool_name', 'children',
-                       'vid@snapshot-00000000-0000-0000-0000-000000000000']),
-                 call(['rbd', '-p', 'pool_name', 'snap', 'ls',
-                       'volume-00000000-0000-0000-0000-000000000000']),
-                 call(['rbd', '-p', 'pool_name', 'children',
-                       'vid@snapshot-00000000-0000-0000-0000-000000000001']),
-                 ]
-        root = rbd_tree.RbdItem('vid', 'pool_name')
+            []
+        ]
+        snap_calls = [call('vid'),
+                      call('volume-00000000-0000-0000-0000-000000000000'),
+                      ]
+        children_calls = [
+            call('vid', 'snapshot-00000000-0000-0000-0000-000000000000'),
+            call('vid', 'snapshot-00000000-0000-0000-0000-000000000001'),
+        ]
+        root = rbd_tree.RbdItem('vid')
         ShellTree(root)
-        self.assertEqual(mock_cmd.call_count, 4)
-        mock_cmd.assert_has_calls(calls)
+        self.assertEqual(mock_get_snaps.call_count, 2)
+        mock_get_snaps.assert_has_calls(snap_calls)
+        self.assertEqual(mock_get_children.call_count, 2)
+        mock_get_children.assert_has_calls(children_calls)
         self.assertEqual(len(root.children), 2)
         self.assertEqual(root.children[0].vid, 'vid')
         self.assertEqual(root.children[0].sid,
